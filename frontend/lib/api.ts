@@ -1,4 +1,16 @@
-import { Project, CreateProjectInput, UpdateProjectInput, HealthStatus, ApiErrorResponse } from '../types';
+import {
+  Project,
+  CreateProjectInput,
+  UpdateProjectInput,
+  Task,
+  TaskWithDependencies,
+  TaskDependenciesResponse,
+  CreateTaskInput,
+  UpdateTaskInput,
+  TaskFilterOptions,
+  HealthStatus,
+  ApiErrorResponse,
+} from '../types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
 
@@ -88,5 +100,79 @@ export const api = {
     return request<{ success: boolean; message: string }>(`/projects/${id}`, {
       method: 'DELETE',
     });
+  },
+
+  // Tasks
+  getProjectTasks: (projectId: string, filters?: TaskFilterOptions): Promise<Task[]> => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.priority) params.append('priority', filters.priority);
+    if (filters?.assigneeId) params.append('assigneeId', filters.assigneeId);
+
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+    return request<Task[]>(`/projects/${projectId}/tasks${queryString}`, {
+      method: 'GET',
+      cache: 'no-store',
+    });
+  },
+
+  createProjectTask: (projectId: string, input: CreateTaskInput): Promise<Task> => {
+    return request<Task>(`/projects/${projectId}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  getTask: (taskId: string): Promise<TaskWithDependencies> => {
+    return request<TaskWithDependencies>(`/tasks/${taskId}`, {
+      method: 'GET',
+      cache: 'no-store',
+    });
+  },
+
+  updateTask: (taskId: string, input: UpdateTaskInput): Promise<Task> => {
+    return request<Task>(`/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
+  },
+
+  deleteTask: (taskId: string): Promise<{ success: boolean; message: string }> => {
+    return request<{ success: boolean; message: string }>(`/tasks/${taskId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // Task Dependencies
+  getTaskDependencies: (taskId: string): Promise<TaskDependenciesResponse> => {
+    return request<TaskDependenciesResponse>(`/tasks/${taskId}/dependencies`, {
+      method: 'GET',
+      cache: 'no-store',
+    });
+  },
+
+  createTaskDependency: (
+    taskId: string,
+    dependsOnTaskId: string
+  ): Promise<{ task_id: string; depends_on_task_id: string; created_at: string }> => {
+    return request<{ task_id: string; depends_on_task_id: string; created_at: string }>(
+      `/tasks/${taskId}/dependencies`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ dependsOnTaskId }),
+      }
+    );
+  },
+
+  deleteTaskDependency: (
+    taskId: string,
+    dependsOnTaskId: string
+  ): Promise<{ success: boolean; message: string }> => {
+    return request<{ success: boolean; message: string }>(
+      `/tasks/${taskId}/dependencies/${dependsOnTaskId}`,
+      {
+        method: 'DELETE',
+      }
+    );
   },
 };

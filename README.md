@@ -21,7 +21,7 @@ The system is split into two independent applications communicating over REST:
 ## 2. Directory Structure
 
 ```
-ai-project-manager/
+orkestr/
 ├── frontend/
 │   ├── app/
 │   │   ├── dashboard/

@@ -57,15 +57,22 @@ export function extractTaskReferences(text: string | null | undefined): string[]
   return Array.from(matches);
 }
 
+export interface RepoCoordinates {
+  repoId?: number | null;
+  repoOwner?: string | null;
+  repoName?: string | null;
+}
+
 /**
- * Resolves a task reference (numeric task_number or UUID) strictly within the given project.
- * Enforces project isolation: never returns a task from another project.
+ * Resolves a task reference (numeric task_number or UUID) within the given project,
+ * or across any project actively connected to the specified repository.
  */
 export async function findTaskByReference(
   ref: string,
-  projectId: string
+  projectId?: string | null,
+  repoCoordinates?: RepoCoordinates | null
 ): Promise<{ id: string; project_id: string; task_number: number; title: string } | null> {
-  if (!ref || !projectId) {
+  if (!ref) {
     return null;
   }
 
@@ -73,35 +80,81 @@ export async function findTaskByReference(
   const isFullUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref);
   const isShortHex = /^[0-9a-f]{8}$/i.test(ref);
 
-  if (isNumeric) {
-    const taskNum = parseInt(ref, 10);
-    const res = await query<{ id: string; project_id: string; task_number: number; title: string }>(
-      `SELECT id, project_id, task_number, title
-       FROM tasks
-       WHERE task_number = $1 AND project_id = $2`,
-      [taskNum, projectId]
-    );
-    return res.rows[0] || null;
+  if (projectId) {
+    if (isNumeric) {
+      const taskNum = parseInt(ref, 10);
+      const res = await query<{ id: string; project_id: string; task_number: number; title: string }>(
+        `SELECT id, project_id, task_number, title
+         FROM tasks
+         WHERE task_number = $1 AND project_id = $2`,
+        [taskNum, projectId]
+      );
+      if (res.rows[0]) return res.rows[0];
+    } else if (isFullUuid) {
+      const res = await query<{ id: string; project_id: string; task_number: number; title: string }>(
+        `SELECT id, project_id, task_number, title
+         FROM tasks
+         WHERE id = $1 AND project_id = $2`,
+        [ref, projectId]
+      );
+      if (res.rows[0]) return res.rows[0];
+    } else if (isShortHex) {
+      const res = await query<{ id: string; project_id: string; task_number: number; title: string }>(
+        `SELECT id, project_id, task_number, title
+         FROM tasks
+         WHERE id::text LIKE $1 || '%' AND project_id = $2`,
+        [ref.toLowerCase(), projectId]
+      );
+      if (res.rows[0]) return res.rows[0];
+    }
   }
 
-  if (isFullUuid) {
-    const res = await query<{ id: string; project_id: string; task_number: number; title: string }>(
-      `SELECT id, project_id, task_number, title
-       FROM tasks
-       WHERE id = $1 AND project_id = $2`,
-      [ref, projectId]
-    );
-    return res.rows[0] || null;
-  }
-
-  if (isShortHex) {
-    const res = await query<{ id: string; project_id: string; task_number: number; title: string }>(
-      `SELECT id, project_id, task_number, title
-       FROM tasks
-       WHERE id::text LIKE $1 || '%' AND project_id = $2`,
-      [ref.toLowerCase(), projectId]
-    );
-    return res.rows[0] || null;
+  // Fallback: If not found in primary project, check any project connected to this repository
+  if (repoCoordinates && (repoCoordinates.repoId != null || (repoCoordinates.repoOwner && repoCoordinates.repoName))) {
+    if (isNumeric) {
+      const taskNum = parseInt(ref, 10);
+      const res = await query<{ id: string; project_id: string; task_number: number; title: string }>(
+        `SELECT t.id, t.project_id, t.task_number, t.title
+         FROM tasks t
+         JOIN projects p ON p.id = t.project_id
+         WHERE t.task_number = $1
+           AND (
+             ($2::bigint IS NOT NULL AND p.github_repo_id = $2::bigint)
+             OR
+             ($3::text IS NOT NULL AND $4::text IS NOT NULL AND LOWER(p.github_repo_owner) = LOWER($3) AND LOWER(p.github_repo_name) = LOWER($4))
+           )
+           AND p.github_connection_status = 'CONNECTED'
+         LIMIT 1`,
+        [
+          taskNum,
+          repoCoordinates.repoId || null,
+          repoCoordinates.repoOwner || null,
+          repoCoordinates.repoName || null,
+        ]
+      );
+      if (res.rows[0]) return res.rows[0];
+    } else if (isFullUuid) {
+      const res = await query<{ id: string; project_id: string; task_number: number; title: string }>(
+        `SELECT t.id, t.project_id, t.task_number, t.title
+         FROM tasks t
+         JOIN projects p ON p.id = t.project_id
+         WHERE t.id = $1
+           AND (
+             ($2::bigint IS NOT NULL AND p.github_repo_id = $2::bigint)
+             OR
+             ($3::text IS NOT NULL AND $4::text IS NOT NULL AND LOWER(p.github_repo_owner) = LOWER($3) AND LOWER(p.github_repo_name) = LOWER($4))
+           )
+           AND p.github_connection_status = 'CONNECTED'
+         LIMIT 1`,
+        [
+          ref,
+          repoCoordinates.repoId || null,
+          repoCoordinates.repoOwner || null,
+          repoCoordinates.repoName || null,
+        ]
+      );
+      if (res.rows[0]) return res.rows[0];
+    }
   }
 
   return null;
@@ -187,6 +240,13 @@ export async function processWebhookEvent(eventId: string): Promise<ActivityProc
     const associatedTaskIds = new Set<string>();
     let associationsCount = 0;
 
+    const repoCoordinates: RepoCoordinates = {
+      repoId: payload.repository?.id ? Number(payload.repository.id) : null,
+      repoOwner: payload.repository?.owner?.login || payload.repository?.owner?.name || null,
+      repoName: payload.repository?.name || null,
+    };
+    const taskProjectMap = new Map<string, string>();
+
     if (eventType === 'push') {
       const refString = typeof payload.ref === 'string' ? payload.ref : '';
       const branchName = refString.replace(/^refs\/heads\//, '');
@@ -195,9 +255,10 @@ export async function processWebhookEvent(eventId: string): Promise<ActivityProc
       // Pre-resolve branch-level task matches
       const branchTasks: string[] = [];
       for (const bRef of branchRefs) {
-        const matched = await findTaskByReference(bRef, projectId);
+        const matched = await findTaskByReference(bRef, projectId, repoCoordinates);
         if (matched) {
           branchTasks.push(matched.id);
+          taskProjectMap.set(matched.id, matched.project_id);
         }
       }
 
@@ -221,9 +282,10 @@ export async function processWebhookEvent(eventId: string): Promise<ActivityProc
 
         const targetTaskIds = new Set<string>([...branchTasks]);
         for (const cRef of commitRefs) {
-          const matched = await findTaskByReference(cRef, projectId);
+          const matched = await findTaskByReference(cRef, projectId, repoCoordinates);
           if (matched) {
             targetTaskIds.add(matched.id);
+            taskProjectMap.set(matched.id, matched.project_id);
           }
         }
 
@@ -243,6 +305,7 @@ export async function processWebhookEvent(eventId: string): Promise<ActivityProc
         const authorUserId = await resolveAuthorUserId(authorGithubId);
 
         for (const taskId of targetTaskIds) {
+          const actualProjectId = taskProjectMap.get(taskId) || projectId;
           const insertRes = await client.query(
             `INSERT INTO task_github_activities (
                task_id,
@@ -265,7 +328,7 @@ export async function processWebhookEvent(eventId: string): Promise<ActivityProc
              RETURNING id`,
             [
               taskId,
-              projectId,
+              actualProjectId,
               event.id,
               commitSha,
               commitUrl,
@@ -301,9 +364,10 @@ export async function processWebhookEvent(eventId: string): Promise<ActivityProc
 
         const targetTaskIds = new Set<string>();
         for (const ref of references) {
-          const matched = await findTaskByReference(ref, projectId);
+          const matched = await findTaskByReference(ref, projectId, repoCoordinates);
           if (matched) {
             targetTaskIds.add(matched.id);
+            taskProjectMap.set(matched.id, matched.project_id);
           }
         }
 
@@ -317,6 +381,7 @@ export async function processWebhookEvent(eventId: string): Promise<ActivityProc
           const authorUserId = await resolveAuthorUserId(prAuthorId);
 
           for (const taskId of targetTaskIds) {
+            const actualProjectId = taskProjectMap.get(taskId) || projectId;
             const insertRes = await client.query(
               `INSERT INTO task_github_activities (
                  task_id,
@@ -339,7 +404,7 @@ export async function processWebhookEvent(eventId: string): Promise<ActivityProc
                RETURNING id`,
               [
                 taskId,
-                projectId,
+                actualProjectId,
                 event.id,
                 prNumber,
                 prUrl,

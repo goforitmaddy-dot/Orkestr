@@ -75,7 +75,7 @@ function validateEvidenceAnchors(
  */
 export const verifyTask = async (
   taskId: string,
-  userId: string
+  userId?: string | null
 ): Promise<TaskVerificationRecord> => {
   // 1. Validate task existence
   const task = await taskService.findTaskById(taskId);
@@ -131,7 +131,7 @@ export const verifyTask = async (
        triggered_by_user_id, created_at, updated_at
      ) VALUES ($1, $2, 'PENDING', 'INSUFFICIENT_EVIDENCE', 'Verification initiated...', 'Evaluating changes...', $3, NOW(), NOW())
      RETURNING id`,
-    [taskId, task.project_id, userId]
+    [taskId, task.project_id, userId || null]
   );
   const verificationId = initialInsert.rows[0].id;
 

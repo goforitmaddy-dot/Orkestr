@@ -3,6 +3,7 @@ import { config } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
 import * as webhookService from '../services/webhook.service';
 import * as activityService from '../services/activity.service';
+import * as verificationService from '../services/verification/verification.service';
 
 /**
  * POST /api/webhooks/github
@@ -85,7 +86,16 @@ export const handleGitHubWebhookHandler = async (
     // Process task activity association if event was persisted
     if (result.eventId && !result.duplicate && !result.ignored) {
       try {
-        await activityService.processWebhookEvent(result.eventId);
+        const actResult = await activityService.processWebhookEvent(result.eventId);
+
+        // Automatically trigger AI verification for any task with incoming push or PR
+        if (actResult.associatedTaskIds && actResult.associatedTaskIds.length > 0) {
+          for (const taskId of actResult.associatedTaskIds) {
+            verificationService.verifyTask(taskId, null).catch((err) => {
+              console.error(`Automatic AI verification failed for task ${taskId}:`, err?.message || err);
+            });
+          }
+        }
       } catch (procErr) {
         console.error(`Error processing task activities for webhook event ${result.eventId}:`, procErr);
       }

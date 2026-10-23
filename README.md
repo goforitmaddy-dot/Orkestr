@@ -195,3 +195,107 @@ All core components have been implemented and verified:
    - Root `/` route returns HTTP 307 temporary redirect to `/dashboard`.
    - `/dashboard`, `/projects`, and `/settings` render with clean developer theme.
    - Reusable UI component library (`Button`, `Card`, `Input`, `Textarea`, `Modal`, `Badge`, `EmptyState`, `LoadingSpinner`) working.
+
+---
+
+## 9. GitHub Integration & Setup Guide
+
+Orkestr provides genuine GitHub integration divided into two distinct concepts:
+1. **Developer Identity Linking**: Links an Orkestr user account to their verified GitHub identity (`github_user_id` and username) using GitHub OAuth authorization code flow with CSRF state protection.
+2. **Project Repository Connection**: Connects an Orkestr project to a specific repository (`github_repo_owner`, `github_repo_name`, `github_repo_id`, `github_default_branch`, `github_installation_id`). Restricted to project **OWNER** and **ADMIN** roles.
+
+### Manual GitHub App Configuration
+
+To configure a GitHub App for Orkestr in development:
+1. Go to **GitHub Developer Settings**: `https://github.com/settings/apps` -> **New GitHub App**.
+2. Fill in the required fields:
+   - **GitHub App name**: `Orkestr-Dev` (or your chosen name)
+   - **Homepage URL**: `http://localhost:3000`
+   - **Callback URL**: `http://localhost:5001/api/auth/github/callback`
+   - **Webhook Active**: Uncheck for now (until Live Project Monitor phase).
+3. Set Permissions:
+   - **Account permissions** -> **Email addresses**: `Read-only`
+4. Generate a **Client Secret** under your newly created App.
+5. Add the credentials to `backend/.env`:
+   ```bash
+   GITHUB_APP_CLIENT_ID=your_client_id_here
+   GITHUB_APP_CLIENT_SECRET=your_client_secret_here
+   GITHUB_OAUTH_CALLBACK_URL=http://localhost:5001/api/auth/github/callback
+   FRONTEND_URL=http://localhost:3000
+   ```
+
+### Running GitHub Integration Tests
+
+The automated test suite mocks external GitHub responses and does not require active credentials or internet access:
+```bash
+cd backend
+npm run test:github
+```
+
+---
+
+## 10. GitHub Webhook Ingestion Foundation
+
+Orkestr includes a dedicated, secure GitHub webhook ingestion pipeline designed to receive and store repository activity (push commits and pull requests) before AI verification.
+
+### Webhook Endpoint Specifications
+* **Endpoint**: `POST /api/webhooks/github`
+* **Authentication**: Unauthenticated by user session; authenticated via cryptographic `X-Hub-Signature-256` HMAC-SHA256 signature verification using `GITHUB_WEBHOOK_SECRET`.
+* **Raw Body Verification**: Evaluates signatures directly against the raw incoming byte buffer in constant time (`crypto.timingSafeEqual`) before JSON parsing.
+* **Idempotency & Deduplication**: Deliveries are tracked by `X-GitHub-Delivery` against the database's unique `event_id` constraint. Retries return 200 without creating duplicate records.
+* **Storage**: Ingested events are recorded in `github_webhook_events` with status `PENDING` (events are never marked processed merely upon receipt).
+* **Project Matching**: Events are matched exclusively against actively connected projects by numeric `github_repo_id` (repository names alone are never trusted, and developer identities are never guessed from commit author strings).
+
+### Manual GitHub App Webhook Setup
+
+To receive real webhook deliveries on your development machine:
+
+1. **Expose Local Backend Port (5001) via Tunnel**:
+   ```bash
+   # Using ngrok (or localtunnel / Cloudflare tunnel):
+   ngrok http 5001
+   ```
+   Note the HTTPS forwarding URL (e.g., `https://abc123xyz.ngrok-free.app`).
+
+2. **Configure Webhook in GitHub App**:
+   * Navigate to **GitHub Developer Settings**: `https://github.com/settings/apps` -> Select your App.
+   * Under **Webhook**:
+     * Check **Active**.
+     * **Webhook URL**: `https://abc123xyz.ngrok-free.app/api/webhooks/github`
+     * **Webhook secret**: Generate a random secret (e.g. `openssl rand -hex 20`).
+     * **SSL verification**: Enable.
+   * Under **Permissions & events**:
+     * **Repository permissions**:
+       * `Contents`: Read-only (enables `push` events).
+       * `Pull requests`: Read-only (enables `pull_request` events).
+     * **Subscribe to events**:
+       * Check `Push`.
+       * Check `Pull request`.
+   * Click **Save changes**.
+
+3. **Configure Environment Secret**:
+   In `backend/.env`, set:
+   ```bash
+   GITHUB_WEBHOOK_SECRET=your_generated_webhook_secret_here
+   ```
+   Restart or reload your backend server.
+
+4. **Verify Live Deliveries**:
+   * In your GitHub App settings, go to **Advanced** -> **Recent Deliveries**.
+   * Click the default `ping` delivery or click **Redeliver**; verify it returns HTTP 200.
+   * Push a commit or open a pull request on your connected repository (e.g., `uttam515/SwarmX`).
+   * Inspect the `github_webhook_events` table in PostgreSQL:
+     ```sql
+     SELECT id, event_id, event_type, project_id, status, created_at
+     FROM github_webhook_events
+     ORDER BY created_at DESC
+     LIMIT 5;
+     ```
+
+### Running Automated Webhook Tests
+
+```bash
+cd backend
+npm run test:webhooks
+```
+All 22 automated webhook tests run with synthetic payloads and generated HMAC secrets without requiring live GitHub credentials.

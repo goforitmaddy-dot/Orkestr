@@ -1,8 +1,176 @@
 import { query } from '../db';
 import { QueryResult } from 'pg';
+import { AppError } from '../middleware/errorHandler';
+import { ProjectRole } from '../types/auth';
 
-export type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'IN_REVIEW' | 'DONE';
+export type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'IN_REVIEW' | 'CHANGES_REQUESTED' | 'DONE';
 export type TaskPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+
+export interface UpdateTaskOptions {
+  userRole?: ProjectRole;
+  userId?: string;
+  systemOverride?: boolean;
+  isReviewApproval?: boolean;
+}
+
+export function validateTaskStatusTransition(
+  currentStatus: TaskStatus,
+  newStatus: TaskStatus,
+  options?: UpdateTaskOptions,
+  assigneeId?: string | null
+): void {
+  // If no change, allowed
+  if (currentStatus === newStatus) {
+    return;
+  }
+
+  // System override (AI verification engine or internal workflow)
+  if (options?.systemOverride || !options?.userRole) {
+    return;
+  }
+
+  const role = options?.userRole;
+  const isOwnerOrAdmin = role === 'OWNER' || role === 'ADMIN';
+  const isAssignee = Boolean(options?.userId && assigneeId && options.userId === assigneeId);
+
+  // 1. Ordinary members cannot mark tasks DONE or CHANGES_REQUESTED directly
+  if (role === 'MEMBER') {
+    if (newStatus === 'DONE') {
+      throw new AppError(
+        'Access denied: Members cannot mark tasks as DONE. Submit the task for verification to have it reviewed and approved.',
+        403
+      );
+    }
+    if (newStatus === 'CHANGES_REQUESTED') {
+      throw new AppError(
+        'Access denied: Status CHANGES_REQUESTED can only be set through verification or human review.',
+        403
+      );
+    }
+  }
+
+  // 2. Direct updates to IN_REVIEW via PATCH are prohibited (must use explicit verification submission)
+  if (newStatus === 'IN_REVIEW') {
+    throw new AppError(
+      "Invalid task status transition: Tasks cannot be directly updated to IN_REVIEW. Use 'Submit for Verification' to verify work against GitHub changes.",
+      400
+    );
+  }
+
+  // 3. State transition rules
+  switch (currentStatus) {
+    case 'TODO':
+      if (newStatus === 'IN_PROGRESS') {
+        if (!isAssignee && !isOwnerOrAdmin) {
+          throw new AppError(
+            'Access denied: Only the assigned developer or project owners/admins can start this task.',
+            403
+          );
+        }
+        return;
+      }
+      throw new AppError(
+        `Invalid task status transition from TODO to ${newStatus}. A task must be started (IN_PROGRESS) before submitting for verification or completion.`,
+        400
+      );
+
+    case 'IN_PROGRESS':
+      if (newStatus === 'DONE') {
+        throw new AppError(
+          'Invalid task status transition: Tasks in IN_PROGRESS must be submitted for verification and approved before moving to DONE.',
+          400
+        );
+      }
+      if (newStatus === 'CHANGES_REQUESTED') {
+        throw new AppError(
+          'Invalid task status transition: Tasks cannot move directly from IN_PROGRESS to CHANGES_REQUESTED without verification or review.',
+          400
+        );
+      }
+      if (newStatus === 'TODO') {
+        if (!isOwnerOrAdmin) {
+          throw new AppError(
+            'Access denied: Only project owners and admins can reset an in-progress task back to TODO.',
+            403
+          );
+        }
+        return;
+      }
+      throw new AppError(
+        `Invalid task status transition from IN_PROGRESS to ${newStatus}.`,
+        400
+      );
+
+    case 'IN_REVIEW':
+      if (newStatus === 'DONE') {
+        if (!isOwnerOrAdmin) {
+          throw new AppError(
+            'Access denied: Only project owners and admins can approve tasks to DONE.',
+            403
+          );
+        }
+        return;
+      }
+      if (newStatus === 'CHANGES_REQUESTED') {
+        if (!isOwnerOrAdmin) {
+          throw new AppError(
+            'Access denied: Only project owners and admins can request changes on a task.',
+            403
+          );
+        }
+        return;
+      }
+      if (newStatus === 'IN_PROGRESS') {
+        if (!isOwnerOrAdmin) {
+          throw new AppError(
+            'Access denied: Only project owners and admins can return a task from IN_REVIEW to IN_PROGRESS.',
+            403
+          );
+        }
+        return;
+      }
+      throw new AppError(
+        `Invalid task status transition from IN_REVIEW to ${newStatus}.`,
+        400
+      );
+
+    case 'CHANGES_REQUESTED':
+      if (newStatus === 'IN_PROGRESS') {
+        if (!isAssignee && !isOwnerOrAdmin) {
+          throw new AppError(
+            'Access denied: Only the assigned developer or project owners/admins can resume work on this task.',
+            403
+          );
+        }
+        return;
+      }
+      throw new AppError(
+        `Invalid task status transition from CHANGES_REQUESTED to ${newStatus}. Developers must resume work (IN_PROGRESS) and address changes before resubmitting.`,
+        400
+      );
+
+    case 'DONE':
+      if (newStatus === 'IN_PROGRESS' || newStatus === 'TODO') {
+        if (!isOwnerOrAdmin) {
+          throw new AppError(
+            'Access denied: Only project owners and admins can reopen a completed task.',
+            403
+          );
+        }
+        return;
+      }
+      throw new AppError(
+        `Invalid task status transition from DONE to ${newStatus}. Completed tasks cannot be modified directly.`,
+        400
+      );
+
+    default:
+      throw new AppError(
+        `Invalid task status transition from ${currentStatus} to ${newStatus}.`,
+        400
+      );
+  }
+}
 
 export interface Task {
   id: string;
@@ -10,12 +178,15 @@ export interface Task {
   parent_task_id: string | null;
   title: string;
   description: string | null;
+  acceptance_criteria?: string[];
   status: TaskStatus;
   priority: TaskPriority;
   estimated_hours: number | null;
+  required_skills: string[];
   assignee_id: string | null;
   assignee_name?: string | null;
   assignee_email?: string | null;
+  task_number: number;
   created_at: string;
   updated_at: string;
 }
@@ -29,9 +200,11 @@ export interface CreateTaskInput {
   projectId: string;
   title: string;
   description?: string | null;
+  acceptanceCriteria?: string[];
   status?: TaskStatus;
   priority?: TaskPriority;
   estimatedHours?: number | null;
+  requiredSkills?: string[];
   assigneeId?: string | null;
   parentTaskId?: string | null;
 }
@@ -39,9 +212,11 @@ export interface CreateTaskInput {
 export interface UpdateTaskInput {
   title?: string;
   description?: string | null;
+  acceptanceCriteria?: string[];
   status?: TaskStatus;
   priority?: TaskPriority;
   estimatedHours?: number | null;
+  requiredSkills?: string[];
   assigneeId?: string | null;
   parentTaskId?: string | null;
 }
@@ -82,12 +257,15 @@ export const findTasksByProjectId = async (
       t.parent_task_id,
       t.title,
       t.description,
+      COALESCE(t.acceptance_criteria, '{}') as acceptance_criteria,
       t.status,
       t.priority,
       t.estimated_hours::float as estimated_hours,
+      COALESCE(t.required_skills, '{}') as required_skills,
       t.assignee_id,
       u.name as assignee_name,
       u.email as assignee_email,
+      t.task_number,
       t.created_at,
       t.updated_at
     FROM tasks t
@@ -108,12 +286,15 @@ export const findTaskById = async (taskId: string): Promise<Task | null> => {
       t.parent_task_id,
       t.title,
       t.description,
+      COALESCE(t.acceptance_criteria, '{}') as acceptance_criteria,
       t.status,
       t.priority,
       t.estimated_hours::float as estimated_hours,
+      COALESCE(t.required_skills, '{}') as required_skills,
       t.assignee_id,
       u.name as assignee_name,
       u.email as assignee_email,
+      t.task_number,
       t.created_at,
       t.updated_at
     FROM tasks t
@@ -170,21 +351,26 @@ export const createTask = async (data: CreateTaskInput): Promise<Task> => {
       parent_task_id,
       title,
       description,
+      acceptance_criteria,
       status,
       priority,
       estimated_hours,
+      required_skills,
       assignee_id
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     RETURNING 
       id,
       project_id,
       parent_task_id,
       title,
       description,
+      COALESCE(acceptance_criteria, '{}') as acceptance_criteria,
       status,
       priority,
       estimated_hours::float as estimated_hours,
+      COALESCE(required_skills, '{}') as required_skills,
       assignee_id,
+      task_number,
       created_at,
       updated_at;
   `;
@@ -194,9 +380,11 @@ export const createTask = async (data: CreateTaskInput): Promise<Task> => {
     data.parentTaskId || null,
     data.title.trim(),
     data.description ? data.description.trim() : null,
+    data.acceptanceCriteria || [],
     data.status || 'TODO',
     data.priority || 'MEDIUM',
     data.estimatedHours || null,
+    data.requiredSkills || [],
     data.assigneeId || null,
   ];
 
@@ -206,8 +394,23 @@ export const createTask = async (data: CreateTaskInput): Promise<Task> => {
 
 export const updateTask = async (
   taskId: string,
-  data: UpdateTaskInput
+  data: UpdateTaskInput,
+  options?: UpdateTaskOptions
 ): Promise<Task | null> => {
+  const currentTask = await findTaskById(taskId);
+  if (!currentTask) {
+    return null;
+  }
+
+  if (data.status !== undefined && data.status !== currentTask.status) {
+    validateTaskStatusTransition(
+      currentTask.status,
+      data.status,
+      options,
+      currentTask.assignee_id
+    );
+  }
+
   const fields: string[] = [];
   const values: unknown[] = [];
   let paramIndex = 1;
@@ -220,6 +423,11 @@ export const updateTask = async (
   if (data.description !== undefined) {
     fields.push(`description = $${paramIndex++}`);
     values.push(data.description ? data.description.trim() : null);
+  }
+
+  if (data.acceptanceCriteria !== undefined) {
+    fields.push(`acceptance_criteria = $${paramIndex++}`);
+    values.push(data.acceptanceCriteria);
   }
 
   if (data.status !== undefined) {
@@ -235,6 +443,11 @@ export const updateTask = async (
   if (data.estimatedHours !== undefined) {
     fields.push(`estimated_hours = $${paramIndex++}`);
     values.push(data.estimatedHours);
+  }
+
+  if (data.requiredSkills !== undefined) {
+    fields.push(`required_skills = $${paramIndex++}`);
+    values.push(data.requiredSkills);
   }
 
   if (data.assigneeId !== undefined) {
@@ -264,10 +477,13 @@ export const updateTask = async (
       parent_task_id,
       title,
       description,
+      COALESCE(acceptance_criteria, '{}') as acceptance_criteria,
       status,
       priority,
       estimated_hours::float as estimated_hours,
       assignee_id,
+      task_number,
+      COALESCE(required_skills, '{}') as required_skills,
       created_at,
       updated_at;
   `;
@@ -433,4 +649,130 @@ export const findUserById = async (userId: string): Promise<boolean> => {
   const sql = 'SELECT 1 FROM users WHERE id = $1;';
   const result = await query(sql, [userId]);
   return (result.rowCount ?? 0) > 0;
+};
+
+export const findRegisteredProjectMember = async (
+  projectId: string,
+  userId: string
+): Promise<{ exists: boolean; isRegistered: boolean; isMember: boolean }> => {
+  const sql = `
+    SELECT 
+      u.id,
+      (u.password_hash IS NOT NULL) AS is_registered,
+      EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id = $1 AND pm.user_id = u.id) AS is_member
+    FROM users u
+    WHERE u.id = $2;
+  `;
+  const result = await query<{ id: string; is_registered: boolean; is_member: boolean }>(sql, [
+    projectId,
+    userId,
+  ]);
+  if (result.rows.length === 0) {
+    return { exists: false, isRegistered: false, isMember: false };
+  }
+  return {
+    exists: true,
+    isRegistered: Boolean(result.rows[0].is_registered),
+    isMember: Boolean(result.rows[0].is_member),
+  };
+};
+
+export interface TaskDependencySummary {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  is_completed: boolean;
+}
+
+export interface PersonalTask {
+  id: string;
+  project_id: string;
+  project_name: string;
+  parent_task_id: string | null;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  priority: TaskPriority;
+  estimated_hours: number | null;
+  assignee_id?: string | null;
+  assignee_name?: string | null;
+  assignee_email?: string | null;
+  dependencies: TaskDependencySummary[];
+  is_blocked: boolean;
+  task_number?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export const findTasksForUser = async (
+  userId: string,
+  scope: 'assigned' | 'all' | 'unassigned' = 'assigned'
+): Promise<PersonalTask[]> => {
+  let whereClause = 't.assignee_id = $1';
+  if (scope === 'all') {
+    whereClause = 'TRUE';
+  } else if (scope === 'unassigned') {
+    whereClause = 't.assignee_id IS NULL';
+  }
+
+  const sql = `
+    SELECT 
+      t.id,
+      t.project_id,
+      p.name AS project_name,
+      t.parent_task_id,
+      t.title,
+      t.description,
+      t.status,
+      t.priority,
+      t.estimated_hours::float AS estimated_hours,
+      t.assignee_id,
+      u.name AS assignee_name,
+      u.email AS assignee_email,
+      t.task_number,
+      t.created_at,
+      t.updated_at,
+      COALESCE(
+        (
+          SELECT json_agg(
+            json_build_object(
+              'id', dep_t.id,
+              'title', dep_t.title,
+              'status', dep_t.status,
+              'is_completed', (dep_t.status = 'DONE')
+            ) ORDER BY dep_t.title ASC
+          )
+          FROM task_dependencies td
+          JOIN tasks dep_t ON td.depends_on_task_id = dep_t.id
+          WHERE td.task_id = t.id
+        ),
+        '[]'::json
+      ) AS dependencies,
+      COALESCE(
+        (
+          SELECT bool_or(dep_t.status != 'DONE')
+          FROM task_dependencies td
+          JOIN tasks dep_t ON td.depends_on_task_id = dep_t.id
+          WHERE td.task_id = t.id
+        ),
+        false
+      ) AND (t.status != 'DONE') AS is_blocked
+    FROM tasks t
+    JOIN projects p ON t.project_id = p.id
+    JOIN project_members pm ON pm.project_id = t.project_id AND pm.user_id = $1
+    LEFT JOIN users u ON t.assignee_id = u.id
+    WHERE ${whereClause}
+    ORDER BY 
+      CASE t.priority
+        WHEN 'URGENT' THEN 1
+        WHEN 'HIGH' THEN 2
+        WHEN 'MEDIUM' THEN 3
+        WHEN 'LOW' THEN 4
+        ELSE 5
+      END,
+      t.created_at DESC;
+  `;
+
+  const result = await query<PersonalTask>(sql, [userId]);
+  return result.rows;
 };

@@ -1,11 +1,23 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { HealthStatus } from '@/types';
-import { Activity, Database, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import {
+  Activity,
+  Database,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  LogOut,
+  LogIn,
+  UserPlus,
+} from 'lucide-react';
 
 export const Header = () => {
+  const { user, loading: authLoading, logout } = useAuth();
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -90,6 +102,57 @@ export const Header = () => {
         >
           <Activity className="h-4 w-4" />
         </button>
+
+        <div className="h-4 w-[1px] bg-slate-800 mx-1" />
+
+        {/* User Session Area */}
+        {authLoading ? (
+          <div className="h-8 w-20 bg-slate-800/60 rounded-md animate-pulse" />
+        ) : user ? (
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600/30 border border-indigo-500/40 text-xs font-semibold text-indigo-300">
+                {user.name ? user.name.slice(0, 2).toUpperCase() : 'U'}
+              </div>
+              <div className="hidden sm:flex flex-col text-left">
+                <span className="text-xs font-medium text-slate-200 leading-tight flex items-center gap-1.5">
+                  {user.name}
+                  {user.username && (
+                    <span className="text-[10px] text-indigo-400 font-mono">@{user.username}</span>
+                  )}
+                </span>
+                <span className="text-[11px] text-slate-400 leading-tight">
+                  {user.email}
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={() => logout()}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors border border-transparent hover:border-rose-500/20"
+              title="Log out of session"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Log out</span>
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Link
+              href="/login"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 rounded-lg transition-colors border border-slate-700/80"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Log in</span>
+            </Link>
+            <Link
+              href="/register"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors shadow-sm shadow-indigo-600/20"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Register</span>
+            </Link>
+          </div>
+        )}
       </div>
     </header>
   );

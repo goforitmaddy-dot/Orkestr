@@ -2,6 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import * as taskService from '../services/task.service';
 import * as projectService from '../services/project.service';
+import * as activityService from '../services/activity.service';
+import * as verificationService from '../services/verification/verification.service';
+import { ReviewSubmissionSchema } from '../services/verification/verification.types';
 import { AppError } from '../middleware/errorHandler';
 
 // Zod schemas
@@ -13,13 +16,15 @@ export const createTaskSchema = z.object({
     .trim()
     .min(1, 'Task title cannot be empty'),
   description: z.string().trim().optional().nullable(),
-  status: z.enum(['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE']).default('TODO'),
+  acceptanceCriteria: z.array(z.string().trim()).default([]).optional(),
+  status: z.enum(['TODO']).default('TODO'),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
   estimatedHours: z
     .number({ invalid_type_error: 'Estimated hours must be a number' })
     .positive('Estimated hours must be a positive number')
     .optional()
     .nullable(),
+  requiredSkills: z.array(z.string().trim()).default([]).optional(),
   assigneeId: z.string().uuid('Invalid assignee ID format').optional().nullable(),
   parentTaskId: z.string().uuid('Invalid parent task ID format').optional().nullable(),
 });
@@ -28,13 +33,15 @@ export const updateTaskSchema = z
   .object({
     title: z.string().trim().min(1, 'Task title cannot be empty').optional(),
     description: z.string().trim().optional().nullable(),
-    status: z.enum(['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE']).optional(),
+    acceptanceCriteria: z.array(z.string().trim()).optional(),
+    status: z.enum(['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'CHANGES_REQUESTED', 'DONE']).optional(),
     priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
     estimatedHours: z
       .number({ invalid_type_error: 'Estimated hours must be a number' })
       .positive('Estimated hours must be a positive number')
       .optional()
       .nullable(),
+    requiredSkills: z.array(z.string().trim()).optional(),
     assigneeId: z.string().uuid('Invalid assignee ID format').optional().nullable(),
     parentTaskId: z.string().uuid('Invalid parent task ID format').optional().nullable(),
   })
@@ -43,7 +50,7 @@ export const updateTaskSchema = z
   });
 
 export const taskFilterSchema = z.object({
-  status: z.enum(['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE']).optional(),
+  status: z.enum(['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'CHANGES_REQUESTED', 'DONE']).optional(),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
   assigneeId: z.string().uuid('Invalid assignee ID filter format').optional(),
 });
@@ -91,11 +98,20 @@ export const createProjectTask = async (req: Request, res: Response, next: NextF
 
     const validatedData = createTaskSchema.parse(req.body);
 
-    // If assigneeId provided, verify user exists
+    // If assigneeId provided, verify user is registered in Orkestr and is a project member
     if (validatedData.assigneeId) {
-      const userExists = await taskService.findUserById(validatedData.assigneeId);
-      if (!userExists) {
+      const memberCheck = await taskService.findRegisteredProjectMember(
+        parsedProjectId.data,
+        validatedData.assigneeId
+      );
+      if (!memberCheck.exists) {
         throw new AppError(`Assignee user with ID ${validatedData.assigneeId} not found`, 400);
+      }
+      if (!memberCheck.isRegistered) {
+        throw new AppError('Tasks can only be assigned to registered Orkestr users', 400);
+      }
+      if (!memberCheck.isMember) {
+        throw new AppError('Assignee must be an active member of this project', 400);
       }
     }
 
@@ -153,11 +169,20 @@ export const updateTask = async (req: Request, res: Response, next: NextFunction
 
     const validatedData = updateTaskSchema.parse(req.body);
 
-    // If assigneeId provided, verify user exists
+    // If assigneeId provided, verify user is registered in Orkestr and is a project member
     if (validatedData.assigneeId) {
-      const userExists = await taskService.findUserById(validatedData.assigneeId);
-      if (!userExists) {
+      const memberCheck = await taskService.findRegisteredProjectMember(
+        currentTask.project_id,
+        validatedData.assigneeId
+      );
+      if (!memberCheck.exists) {
         throw new AppError(`Assignee user with ID ${validatedData.assigneeId} not found`, 400);
+      }
+      if (!memberCheck.isRegistered) {
+        throw new AppError('Tasks can only be assigned to registered Orkestr users', 400);
+      }
+      if (!memberCheck.isMember) {
+        throw new AppError('Assignee must be an active member of this project', 400);
       }
     }
 
@@ -185,7 +210,10 @@ export const updateTask = async (req: Request, res: Response, next: NextFunction
       }
     }
 
-    const updated = await taskService.updateTask(parsedTaskId.data, validatedData);
+    const updated = await taskService.updateTask(parsedTaskId.data, validatedData, {
+      userRole: req.projectMember?.role,
+      userId: req.user?.id,
+    });
     res.status(200).json(updated);
   } catch (error) {
     next(error);
@@ -310,3 +338,138 @@ export const deleteTaskDependency = async (req: Request, res: Response, next: Ne
     next(error);
   }
 };
+
+export const getTaskGitHubActivities = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const parsedTaskId = uuidSchema.safeParse(req.params.taskId);
+    if (!parsedTaskId.success) {
+      throw new AppError('Task not found', 404);
+    }
+
+    if (!req.projectMember) {
+      throw new AppError('Membership context missing', 500);
+    }
+
+    const activities = await activityService.getActivitiesForTask(
+      parsedTaskId.data,
+      req.projectMember.projectId
+    );
+
+    res.status(200).json({
+      success: true,
+      activities,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const verifyTaskHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const parsedTaskId = uuidSchema.safeParse(req.params.taskId);
+    if (!parsedTaskId.success) {
+      throw new AppError('Task not found', 404);
+    }
+
+    if (!req.user) {
+      throw new AppError('Authentication required', 401);
+    }
+
+    const task = await taskService.findTaskById(parsedTaskId.data);
+    if (!task) {
+      throw new AppError('Task not found', 404);
+    }
+
+    const userRole = req.projectMember?.role;
+    const isAssignee = task.assignee_id === req.user.id;
+    const isOwnerOrAdmin = userRole === 'OWNER' || userRole === 'ADMIN';
+
+    if (!isAssignee && !isOwnerOrAdmin) {
+      throw new AppError(
+        'Access denied: Only the assigned developer or project owners/admins can submit this task for verification',
+        403
+      );
+    }
+
+    if (task.status === 'DONE') {
+      throw new AppError('Task is already completed', 400);
+    }
+
+    const report = await verificationService.verifyTask(
+      parsedTaskId.data,
+      req.user.id
+    );
+
+    res.status(200).json({
+      success: true,
+      verification: report,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getTaskVerificationHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const parsedTaskId = uuidSchema.safeParse(req.params.taskId);
+    if (!parsedTaskId.success) {
+      throw new AppError('Task not found', 404);
+    }
+
+    const report = await verificationService.getLatestVerification(parsedTaskId.data);
+
+    res.status(200).json({
+      success: true,
+      verification: report,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const reviewTaskVerificationHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const parsedTaskId = uuidSchema.safeParse(req.params.taskId);
+    if (!parsedTaskId.success) {
+      throw new AppError('Task not found', 404);
+    }
+
+    if (!req.user) {
+      throw new AppError('Authentication required', 401);
+    }
+
+    const validatedInput = ReviewSubmissionSchema.parse(req.body);
+
+    const updatedReport = await verificationService.submitReview(
+      parsedTaskId.data,
+      req.user.id,
+      validatedInput.decision,
+      validatedInput.feedback,
+      validatedInput.acknowledgeStale
+    );
+
+    res.status(200).json({
+      success: true,
+      verification: updatedReport,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

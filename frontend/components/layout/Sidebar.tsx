@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
+  Activity,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -34,6 +35,12 @@ export const Sidebar = ({ isCollapsed, onToggleCollapse }: SidebarProps) => {
       href: '/projects',
       icon: FolderKanban,
       active: pathname.startsWith('/projects'),
+    },
+    {
+      name: 'Live Monitor',
+      href: '/monitor',
+      icon: Activity,
+      active: pathname === '/monitor',
     },
     {
       name: 'Settings',

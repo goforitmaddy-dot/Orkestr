@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-import { Project } from '@/types';
+import { Project, MonitoringSummary } from '@/types';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -16,17 +16,20 @@ import {
   FolderKanban,
   Plus,
   ArrowRight,
-  Clock,
   Sparkles,
   Layers,
   AlertCircle,
   Calendar,
+  Activity,
+  AlertTriangle,
 } from 'lucide-react';
 
 export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [summary, setSummary] = useState<MonitoringSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isStreamConnected, setIsStreamConnected] = useState(false);
 
   // Create Project Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -35,22 +38,47 @@ export default function DashboardPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const fetchProjects = async () => {
+  const fetchSummary = useCallback(async () => {
+    try {
+      const summaryData = await api.getMonitoringSummary();
+      setSummary(summaryData);
+    } catch {
+      // Ignore background failures
+    }
+  }, []);
+
+  const fetchDashboardData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await api.getProjects();
-      setProjects(data);
+      const [projectsData] = await Promise.all([api.getProjects(), fetchSummary()]);
+      setProjects(projectsData);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch projects from backend');
+      setError(err.message || 'Failed to fetch dashboard data from backend');
     } finally {
       setLoading(false);
     }
-  };
+  }, [fetchSummary]);
 
   useEffect(() => {
-    fetchProjects();
-  }, []);
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  // Live updates straight from the backend event stream
+  useEffect(() => {
+    const dispose = api.subscribeToMonitoringEvents(
+      () => fetchSummary(),
+      (connected) => setIsStreamConnected(connected)
+    );
+    return dispose;
+  }, [fetchSummary]);
+
+  // Polling fallback when the stream is unavailable
+  useEffect(() => {
+    if (isStreamConnected) return;
+    const interval = setInterval(fetchSummary, 15000);
+    return () => clearInterval(interval);
+  }, [isStreamConnected, fetchSummary]);
 
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,7 +98,7 @@ export default function DashboardPage() {
       setProjectName('');
       setProjectDescription('');
       setIsModalOpen(false);
-      await fetchProjects();
+      await fetchDashboardData();
     } catch (err: any) {
       setFormError(err.message || 'Failed to create project');
     } finally {
@@ -81,6 +109,9 @@ export default function DashboardPage() {
   // Summary metrics calculated directly from real data
   const totalProjects = projects.length;
   const recentProjects = projects.slice(0, 5);
+  const activeErrors = summary?.totalActiveErrors ?? 0;
+  const activeIncidents = summary?.activeIncidents ?? 0;
+  const activeRuntimeErrors = summary?.activeRuntimeErrors ?? 0;
 
   const formatDate = (dateStr: string) => {
     try {
@@ -113,7 +144,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Real Summary Metrics Section */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-xs font-medium text-slate-400 uppercase tracking-wider">
@@ -130,6 +161,40 @@ export default function DashboardPage() {
             </p>
           </CardContent>
         </Card>
+
+        {/* Live Error Monitor Status */}
+        <Link href="/monitor">
+          <Card className={`transition-all duration-200 cursor-pointer hover:border-slate-700 ${
+            activeErrors > 0 ? 'border-rose-500/40 bg-rose-950/20' : ''
+          }`}>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+                Live Error Monitor
+              </CardTitle>
+              <Activity className={`h-4 w-4 ${activeErrors > 0 ? 'text-rose-400' : 'text-emerald-400'}`} />
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2">
+                <span className={`text-lg font-bold ${activeErrors > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {activeErrors > 0 ? `${activeErrors} Error${activeErrors > 1 ? 's' : ''}` : 'All Healthy'}
+                </span>
+                {activeErrors > 0 && (
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                {activeErrors > 0
+                  ? `${activeIncidents} CI failure(s), ${activeRuntimeErrors} runtime error(s)`
+                  : isStreamConnected
+                  ? 'Live stream connected - no open failures'
+                  : 'No open failures detected'}
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -170,6 +235,37 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      {/* Active Unresolved Errors Alert Banner */}
+      {activeErrors > 0 && (
+        <div className="rounded-xl border border-rose-500/40 bg-gradient-to-r from-rose-950/40 via-rose-900/20 to-slate-900/60 p-4 text-rose-200 shadow-lg shadow-rose-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-rose-500/20 text-rose-300">
+              <AlertTriangle className="w-5 h-5 text-rose-400 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-rose-100 text-sm">
+                  {activeErrors} Active Error{activeErrors > 1 ? 's' : ''} Detected
+                </span>
+                <Badge variant="danger" className="text-[10px] font-mono">
+                  ACTION REQUIRED
+                </Badge>
+              </div>
+              <p className="text-xs text-rose-300/80 mt-0.5">
+                {activeIncidents} CI workflow failure(s) and {activeRuntimeErrors} application
+                runtime error(s) are currently open.
+              </p>
+            </div>
+          </div>
+          <Link href="/monitor">
+            <Button size="sm" className="bg-rose-600 hover:bg-rose-500 text-white shrink-0">
+              <Activity className="w-3.5 h-3.5 mr-1" />
+              Open Live Monitor
+            </Button>
+          </Link>
+        </div>
+      )}
+
       {/* Error Banner if API connection fails */}
       {error && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-rose-300 flex items-start gap-3">
@@ -180,7 +276,7 @@ export default function DashboardPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={fetchProjects}
+              onClick={fetchDashboardData}
               className="mt-3 text-xs border-rose-500/40 text-rose-200 hover:bg-rose-500/20"
             >
               Retry Connection

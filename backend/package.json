@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "lint": "eslint . --ext .ts",
+    "test": "tsx src/tests/stage3_stage4.test.ts && tsx src/tests/live_monitor_e2e.test.ts && tsx src/tests/auth_e2e.test.ts && tsx src/tests/github_integration.test.ts",
     "migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
@@ -29,5 +30,9 @@
     "prettier": "^3.3.3",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
   }
 }

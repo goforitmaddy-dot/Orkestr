@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 
@@ -10,6 +11,12 @@ export interface AppShellProps {
 
 export const AppShell = ({ children }: AppShellProps) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const pathname = usePathname();
+
+  // The sign-in page is a full screen experience without the app chrome.
+  if (pathname === '/login' || pathname === '/signup') {
+    return <>{children}</>;
+  }
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">

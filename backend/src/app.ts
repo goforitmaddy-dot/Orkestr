@@ -1,4 +1,4 @@
-import express, { Express } from 'express';
+import express, { Express, Request } from 'express';
 import cors from 'cors';
 import { config } from './config/env';
 import { requestLogger } from './middleware/logger';
@@ -23,12 +23,27 @@ export const createApp = (): Express => {
         return callback(null, false);
       },
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-GitHub-Event',
+        'X-GitHub-Delivery',
+        'X-Hub-Signature-256',
+      ],
       credentials: true,
     })
   );
 
-  app.use(express.json());
+  // Capture the raw request body so webhook HMAC signatures can be verified
+  // against the exact bytes GitHub sent.
+  app.use(
+    express.json({
+      limit: '5mb',
+      verify: (req, _res, buf) => {
+        (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+      },
+    })
+  );
   app.use(express.urlencoded({ extended: true }));
 
   if (!config.isProduction) {

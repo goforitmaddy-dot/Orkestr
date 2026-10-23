@@ -7,20 +7,34 @@ import { AppError } from '../middleware/errorHandler';
 export const createProjectSchema = z.object({
   name: z.string({ required_error: 'Project name is required' }).trim().min(1, 'Project name cannot be empty'),
   description: z.string().trim().optional().nullable(),
+  provider: z.string().trim().optional().nullable(),
+  repository: z.string().trim().optional().nullable(),
+  monitoringEnabled: z.boolean().optional().nullable(),
 });
 
 export const updateProjectSchema = z.object({
   name: z.string().trim().min(1, 'Project name cannot be empty').optional(),
   description: z.string().trim().optional().nullable(),
-}).refine(data => data.name !== undefined || data.description !== undefined, {
-  message: 'At least one field (name or description) must be provided to update',
-});
+  provider: z.string().trim().optional().nullable(),
+  repository: z.string().trim().optional().nullable(),
+  monitoringEnabled: z.boolean().optional().nullable(),
+}).refine(
+  data =>
+    data.name !== undefined ||
+    data.description !== undefined ||
+    data.provider !== undefined ||
+    data.repository !== undefined ||
+    data.monitoringEnabled !== undefined,
+  {
+    message: 'At least one field must be provided to update',
+  }
+);
 
 const uuidSchema = z.string().uuid('Invalid project ID format. Must be a valid UUID.');
 
-export const listProjects = async (_req: Request, res: Response, next: NextFunction) => {
+export const listProjects = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const projects = await projectService.findAllProjects();
+    const projects = await projectService.findAllProjects(req.user?.id);
     res.status(200).json(projects);
   } catch (error) {
     next(error);
@@ -34,7 +48,7 @@ export const getProject = async (req: Request, res: Response, next: NextFunction
       throw new AppError('Project not found', 404);
     }
 
-    const project = await projectService.findProjectById(parsedId.data);
+    const project = await projectService.findProjectById(parsedId.data, req.user?.id);
     if (!project) {
       throw new AppError(`Project with ID ${req.params.id} not found`, 404);
     }
@@ -48,7 +62,7 @@ export const getProject = async (req: Request, res: Response, next: NextFunction
 export const createProject = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validatedData = createProjectSchema.parse(req.body);
-    const newProject = await projectService.createProject(validatedData);
+    const newProject = await projectService.createProject(validatedData, req.user?.id ?? null);
     res.status(201).json(newProject);
   } catch (error) {
     next(error);
@@ -63,7 +77,11 @@ export const updateProject = async (req: Request, res: Response, next: NextFunct
     }
 
     const validatedData = updateProjectSchema.parse(req.body);
-    const updated = await projectService.updateProject(parsedId.data, validatedData);
+    const updated = await projectService.updateProject(
+      parsedId.data,
+      validatedData,
+      req.user?.id
+    );
     if (!updated) {
       throw new AppError(`Project with ID ${req.params.id} not found`, 404);
     }
@@ -81,7 +99,7 @@ export const deleteProject = async (req: Request, res: Response, next: NextFunct
       throw new AppError('Project not found', 404);
     }
 
-    const deleted = await projectService.deleteProject(parsedId.data);
+    const deleted = await projectService.deleteProject(parsedId.data, req.user?.id);
     if (!deleted) {
       throw new AppError(`Project with ID ${req.params.id} not found`, 404);
     }

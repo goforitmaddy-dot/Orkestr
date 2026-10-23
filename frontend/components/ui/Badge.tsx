@@ -3,7 +3,7 @@ import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
-  variant?: 'default' | 'success' | 'warning' | 'neutral' | 'outline';
+  variant?: 'default' | 'success' | 'warning' | 'danger' | 'neutral' | 'outline';
 }
 
 export const Badge = ({
@@ -16,6 +16,7 @@ export const Badge = ({
     default: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
     success: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
     warning: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+    danger: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
     neutral: 'bg-slate-800 text-slate-300 border-slate-700',
     outline: 'bg-transparent text-slate-400 border-slate-700',
   };

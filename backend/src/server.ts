@@ -1,6 +1,8 @@
 import app from './app';
 import { config } from './config/env';
 import { pool } from './db';
+import { startCiMonitor, stopCiMonitor } from './services/ciMonitor.service';
+import { closeAll } from './services/eventBus.service';
 
 const server = app.listen(config.port, () => {
   console.log(`=================================`);
@@ -8,12 +10,18 @@ const server = app.listen(config.port, () => {
   console.log(`📡 Server listening on port ${config.port}`);
   console.log(`🌍 Environment: ${config.nodeEnv}`);
   console.log(`🔗 Health check: http://localhost:${config.port}/api/health`);
+  console.log(`📨 Live event stream: http://localhost:${config.port}/api/monitoring/stream`);
   console.log(`=================================`);
 });
+
+// Start the background CI monitoring poller
+startCiMonitor();
 
 // Graceful shutdown
 const shutdown = async (signal: string) => {
   console.log(`\nReceived ${signal}. Gracefully shutting down...`);
+  stopCiMonitor();
+  closeAll();
   server.close(async () => {
     console.log('HTTP server closed.');
     try {

@@ -2,6 +2,11 @@
 node_modules/
 .pnp
 .pnp.js
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
 
 # Build Outputs
 dist/
@@ -32,3 +37,4 @@ pnpm-debug.log*
 
 # TypeScript cache
 *.tsbuildinfo
+

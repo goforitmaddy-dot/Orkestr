@@ -20,6 +20,8 @@ import {
   AlertCircle,
   ExternalLink,
   RefreshCw,
+  GitBranch,
+  Radio,
 } from 'lucide-react';
 
 export default function ProjectsPage() {
@@ -32,8 +34,13 @@ export default function ProjectsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
+  const [projectRepository, setProjectRepository] = useState('');
+  const [projectServerUrl, setProjectServerUrl] = useState('');
+  const [projectEnvironment, setProjectEnvironment] = useState('production');
+  const [projectMonitoringEnabled, setProjectMonitoringEnabled] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [hasUserToken, setHasUserToken] = useState(false);
 
   const fetchProjects = async () => {
     try {
@@ -52,6 +59,13 @@ export default function ProjectsPage() {
     fetchProjects();
   }, []);
 
+  useEffect(() => {
+    api
+      .getGitHubConnections()
+      .then((connections) => setHasUserToken(connections.some((c) => c.status === 'valid')))
+      .catch(() => setHasUserToken(false));
+  }, []);
+
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!projectName.trim()) {
@@ -59,16 +73,36 @@ export default function ProjectsPage() {
       return;
     }
 
+    const repository = projectRepository.trim();
+
     try {
       setIsSubmitting(true);
       setFormError(null);
-      await api.createProject({
+      const updated = await api.createProject({
         name: projectName.trim(),
         description: projectDescription.trim() || undefined,
+        provider: 'github',
+        repository: repository || undefined,
+        monitoringEnabled: projectMonitoringEnabled && repository.length > 0,
       });
+
+      if (projectServerUrl.trim()) {
+        await api.configureServerMonitoring(updated.id, {
+          serverUrl: projectServerUrl.trim(),
+          environment: projectEnvironment,
+          webhookUrl: null,
+          notifyTeam: true,
+          healthCheckIntervalMs: 30000,
+          enabled: true,
+        });
+      }
 
       setProjectName('');
       setProjectDescription('');
+      setProjectRepository('');
+      setProjectServerUrl('');
+      setProjectEnvironment('production');
+      setProjectMonitoringEnabled(false);
       setIsModalOpen(false);
       await fetchProjects();
     } catch (err: any) {
@@ -196,13 +230,34 @@ export default function ProjectsPage() {
                   >
                     {project.name}
                   </Link>
-                  <Badge variant="neutral" className="text-[10px] shrink-0 font-mono">
-                    Project
-                  </Badge>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {project.monitoring_enabled ? (
+                      <Badge variant="success" className="text-[10px] font-mono">
+                        MONITORING
+                      </Badge>
+                    ) : project.repository ? (
+                      <Badge variant="neutral" className="text-[10px] font-mono">
+                        LINKED
+                      </Badge>
+                    ) : (
+                      <Badge variant="neutral" className="text-[10px] font-mono">
+                        Project
+                      </Badge>
+                    )}
+                  </div>
                 </div>
                 <CardDescription className="line-clamp-3 min-h-[3.5rem] mt-1">
                   {project.description || 'No description provided.'}
                 </CardDescription>
+                {project.repository && (
+                  <div className="flex items-center gap-1.5 mt-2 text-[11px] font-mono text-slate-400">
+                    <GitBranch className="w-3.5 h-3.5 text-slate-500" />
+                    <span className="truncate">{project.repository}</span>
+                    {project.monitoring_enabled && (
+                      <Radio className="w-3 h-3 text-emerald-400 shrink-0" />
+                    )}
+                  </div>
+                )}
               </CardHeader>
 
               <CardContent className="pt-0">
@@ -253,6 +308,77 @@ export default function ProjectsPage() {
             onChange={(e) => setProjectDescription(e.target.value)}
             rows={3}
           />
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5">
+              GitHub Repository (Optional)
+            </label>
+            <input
+              type="text"
+              placeholder="owner/repository"
+              value={projectRepository}
+              onChange={(e) => setProjectRepository(e.target.value)}
+              className="w-full rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm font-mono text-slate-200 placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Linking a repository lets the monitor watch real GitHub Actions workflows.
+            </p>
+            {!hasUserToken && (
+              <p className="text-[11px] text-amber-400 mt-1">
+                You have not connected a GitHub token yet - monitoring stays inactive until you
+                add one in Settings.
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5">
+              Live Server URL (Optional)
+            </label>
+            <input
+              type="text"
+              placeholder="https://api.yourproject.com"
+              value={projectServerUrl}
+              onChange={(e) => setProjectServerUrl(e.target.value)}
+              className="w-full rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm font-mono text-slate-200 placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              The monitor will poll this server for health and surface crashes/errors to the Live Monitor.
+            </p>
+            <div className="flex items-center gap-2 mt-2">
+              <label className="text-xs text-slate-300">Environment</label>
+              <select
+                value={projectEnvironment}
+                onChange={(e) => setProjectEnvironment(e.target.value)}
+                className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="production">Production</option>
+                <option value="staging">Staging</option>
+                <option value="development">Development</option>
+              </select>
+            </div>
+          </div>
+          <label
+            className={`flex items-start gap-3 rounded-lg border p-3 transition-colors cursor-pointer ${
+              projectRepository.trim()
+                ? 'border-slate-800 bg-slate-900/40'
+                : 'border-slate-800/60 bg-slate-950/40 opacity-60'
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={projectMonitoringEnabled}
+              disabled={!projectRepository.trim()}
+              onChange={(e) => setProjectMonitoringEnabled(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+            />
+            <div>
+              <span className="text-xs font-medium text-slate-200">
+                Enable live error monitoring
+              </span>
+              <span className="block text-[11px] text-slate-500 mt-0.5">
+                Poll this repository for workflow failures and stream them to the Live Monitor.
+              </span>
+            </div>
+          </label>
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
             <Button
               type="button"

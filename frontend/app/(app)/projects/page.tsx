@@ -23,8 +23,13 @@ import {
   GitBranch,
   Radio,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/context/AuthContext';
 
 export default function ProjectsPage() {
+  const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,8 +61,24 @@ export default function ProjectsPage() {
   };
 
   useEffect(() => {
-    fetchProjects();
-  }, []);
+    if (!authLoading && !user) {
+      router.replace('/login?redirect=/projects');
+    }
+  }, [user, authLoading, router]);
+
+  useEffect(() => {
+    if (user) {
+      fetchProjects();
+    }
+  }, [user]);
+
+  if (authLoading || !user) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <LoadingSpinner />
+      </div>
+    );
+  }
 
   useEffect(() => {
     api

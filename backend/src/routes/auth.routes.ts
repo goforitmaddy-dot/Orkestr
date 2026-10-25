@@ -7,6 +7,12 @@ import {
   updateCurrentUser,
 } from '../controllers/auth.controller';
 import { optionalAuth, requireAuth } from '../middleware/auth';
+import {
+  getGitHubIdentityStatusHandler,
+  startGitHubConnectHandler,
+  handleGitHubCallbackHandler,
+  disconnectGitHubIdentityHandler,
+} from '../controllers/github.controller';
 
 /**
  * Account and session endpoints.
@@ -19,5 +25,11 @@ router.post('/login', login);
 router.post('/logout', optionalAuth, logout);
 router.get('/me', requireAuth, getCurrentUser);
 router.patch('/me', requireAuth, updateCurrentUser);
+
+// GitHub Identity Linking Endpoints
+router.get('/github/status', requireAuth, getGitHubIdentityStatusHandler);
+router.get('/github/connect', requireAuth, startGitHubConnectHandler);
+router.get('/github/callback', handleGitHubCallbackHandler);
+router.delete('/github/disconnect', requireAuth, disconnectGitHubIdentityHandler);
 
 export default router;

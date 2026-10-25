@@ -9,6 +9,7 @@ export const createProjectSchema = z.object({
   description: z.string().trim().optional().nullable(),
   provider: z.string().trim().optional().nullable(),
   repository: z.string().trim().optional().nullable(),
+  serverUrl: z.string().trim().optional().nullable(),
   monitoringEnabled: z.boolean().optional().nullable(),
 });
 
@@ -17,6 +18,7 @@ export const updateProjectSchema = z.object({
   description: z.string().trim().optional().nullable(),
   provider: z.string().trim().optional().nullable(),
   repository: z.string().trim().optional().nullable(),
+  serverUrl: z.string().trim().optional().nullable(),
   monitoringEnabled: z.boolean().optional().nullable(),
 }).refine(
   data =>
@@ -24,6 +26,7 @@ export const updateProjectSchema = z.object({
     data.description !== undefined ||
     data.provider !== undefined ||
     data.repository !== undefined ||
+    data.serverUrl !== undefined ||
     data.monitoringEnabled !== undefined,
   {
     message: 'At least one field must be provided to update',
@@ -34,7 +37,10 @@ const uuidSchema = z.string().uuid('Invalid project ID format. Must be a valid U
 
 export const listProjects = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const projects = await projectService.findAllProjects(req.user?.id);
+    if (!req.user) {
+      throw new AppError('Authentication required', 401);
+    }
+    const projects = await projectService.findAllProjects(req.user.id);
     res.status(200).json(projects);
   } catch (error) {
     next(error);
@@ -50,7 +56,7 @@ export const getProject = async (req: Request, res: Response, next: NextFunction
 
     const project = await projectService.findProjectById(parsedId.data, req.user?.id);
     if (!project) {
-      throw new AppError(`Project with ID ${req.params.id} not found`, 404);
+      throw new AppError('Project not found', 404);
     }
 
     res.status(200).json(project);
@@ -61,8 +67,11 @@ export const getProject = async (req: Request, res: Response, next: NextFunction
 
 export const createProject = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (!req.user) {
+      throw new AppError('Authentication required', 401);
+    }
     const validatedData = createProjectSchema.parse(req.body);
-    const newProject = await projectService.createProject(validatedData, req.user?.id ?? null);
+    const newProject = await projectService.createProject(validatedData, req.user.id);
     res.status(201).json(newProject);
   } catch (error) {
     next(error);
@@ -83,7 +92,7 @@ export const updateProject = async (req: Request, res: Response, next: NextFunct
       req.user?.id
     );
     if (!updated) {
-      throw new AppError(`Project with ID ${req.params.id} not found`, 404);
+      throw new AppError('Project not found', 404);
     }
 
     res.status(200).json(updated);
@@ -101,7 +110,7 @@ export const deleteProject = async (req: Request, res: Response, next: NextFunct
 
     const deleted = await projectService.deleteProject(parsedId.data, req.user?.id);
     if (!deleted) {
-      throw new AppError(`Project with ID ${req.params.id} not found`, 404);
+      throw new AppError('Project not found', 404);
     }
 
     res.status(200).json({ success: true, message: 'Project deleted successfully' });

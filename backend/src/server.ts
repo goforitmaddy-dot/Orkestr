@@ -3,6 +3,7 @@ import { config } from './config/env';
 import { pool } from './db';
 import { startCiMonitor, stopCiMonitor } from './services/ciMonitor.service';
 import { closeAll } from './services/eventBus.service';
+import { processPendingWebhookEvents } from './services/activity.service';
 
 const server = app.listen(config.port, () => {
   console.log(`=================================`);
@@ -12,6 +13,11 @@ const server = app.listen(config.port, () => {
   console.log(`🔗 Health check: http://localhost:${config.port}/api/health`);
   console.log(`📨 Live event stream: http://localhost:${config.port}/api/monitoring/stream`);
   console.log(`=================================`);
+
+  // Process any pending webhook events on startup
+  processPendingWebhookEvents().catch((err) => {
+    console.error('Error processing pending webhook events on startup:', err);
+  });
 });
 
 // Start the background CI monitoring poller
@@ -22,6 +28,9 @@ const shutdown = async (signal: string) => {
   console.log(`\nReceived ${signal}. Gracefully shutting down...`);
   stopCiMonitor();
   closeAll();
+  if (typeof (server as any).closeAllConnections === 'function') {
+    (server as any).closeAllConnections();
+  }
   server.close(async () => {
     console.log('HTTP server closed.');
     try {
@@ -33,11 +42,10 @@ const shutdown = async (signal: string) => {
     process.exit(0);
   });
 
-  // Force shutdown after 10s if graceful fails
+  // Force shutdown after 2s if graceful fails
   setTimeout(() => {
-    console.error('Forced shutdown after timeout.');
-    process.exit(1);
-  }, 10000);
+    process.exit(0);
+  }, 2000).unref();
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));

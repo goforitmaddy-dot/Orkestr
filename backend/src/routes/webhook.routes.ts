@@ -1,13 +1,21 @@
 import { Router } from 'express';
-import { handleGitHubWebhook } from '../controllers/webhook.controller';
+import express from 'express';
+import { handleGitHubWebhookHandler } from '../controllers/webhook.controller';
 
 const router = Router();
 
 /**
- * Receives genuine GitHub webhook deliveries (workflow_run, workflow_job,
- * check_run). Requests are verified against GITHUB_WEBHOOK_SECRET when one
- * is configured.
+ * POST /api/webhooks/github
+ * Raw byte parsing is used to ensure HMAC-SHA256 signature verification occurs against
+ * the exact bytes transmitted by GitHub, before JSON parsing.
  */
-router.post('/github', handleGitHubWebhook);
+router.post(
+  '/github',
+  express.raw({
+    type: '*/*',
+    limit: '10mb',
+  }),
+  handleGitHubWebhookHandler
+);
 
 export default router;

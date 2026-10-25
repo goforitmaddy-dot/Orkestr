@@ -9,6 +9,9 @@ import monitoringRoutes from './monitoring.routes';
 import authRoutes from './auth.routes';
 import githubConnectionRoutes from './githubConnection.routes';
 import notificationRoutes from './notification.routes';
+import taskRoutes from './task.routes';
+import meRoutes from './me.routes';
+import { listUsersHandler } from '../controllers/member.controller';
 
 const router = Router();
 
@@ -22,5 +25,8 @@ router.use('/incidents', incidentDiagnosisRoutes);
 router.use('/errors', applicationErrorRoutes);
 router.use('/monitoring', monitoringRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/tasks', taskRoutes);
+router.use('/me', meRoutes);
+router.get('/users', listUsersHandler);
 
 export default router;

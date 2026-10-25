@@ -1,9 +1,13 @@
 import express, { Express, Request } from 'express';
 import cors from 'cors';
+import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
+import { pool } from './db';
 import { config } from './config/env';
 import { requestLogger } from './middleware/logger';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import apiRoutes from './routes';
+import webhookRoutes from './routes/webhook.routes';
 
 export const createApp = (): Express => {
   const app = express();
@@ -46,12 +50,41 @@ export const createApp = (): Express => {
   );
   app.use(express.urlencoded({ extended: true }));
 
+  if (config.isProduction) {
+    app.set('trust proxy', 1);
+  }
+
+  // Session management backed by PostgreSQL
+  const PgSession = connectPgSimple(session);
+  app.use(
+    session({
+      store: new PgSession({
+        pool,
+        tableName: 'session',
+        createTableIfMissing: false,
+      }),
+      name: 'orkestr.sid',
+      secret: config.session.secret,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        secure: config.isProduction,
+        sameSite: config.isProduction ? 'none' : 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      },
+    })
+  );
+
   if (!config.isProduction) {
     app.use(requestLogger);
   }
 
   // Mount API routes
   app.use('/api', apiRoutes);
+
+  // Mount webhook routes (raw body parsing handled via express.json verify above)
+  app.use('/api/webhooks', webhookRoutes);
 
   // Catch 404s
   app.use(notFoundHandler);

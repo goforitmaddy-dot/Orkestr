@@ -31,6 +31,7 @@ export const errorHandler = (
 ) => {
   // Handle Zod validation errors
   if (err instanceof ZodError) {
+    console.warn('[errorHandler 400 ZodError]', err.errors);
     return res.status(400).json({
       error: {
         message: 'Validation failed',
@@ -45,6 +46,9 @@ export const errorHandler = (
 
   // Handle custom AppError
   if (err instanceof AppError) {
+    if (err.statusCode >= 400 && err.statusCode < 500) {
+      console.warn(`[errorHandler ${err.statusCode} AppError]`, err.message, err.details || '');
+    }
     return res.status(err.statusCode).json({
       error: {
         message: err.message,

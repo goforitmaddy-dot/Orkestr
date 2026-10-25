@@ -1,4 +1,4 @@
-import { query } from '../db';
+import { query, pool } from '../db';
 
 export interface Project {
   id: string;
@@ -11,6 +11,7 @@ export interface Project {
   last_polled_at: string | null;
   last_poll_error: string | null;
   owner_id: string | null;
+  role?: 'OWNER' | 'ADMIN' | 'MEMBER';
   created_at: string;
   updated_at: string;
 }
@@ -76,6 +77,19 @@ export const findAllProjects = async (ownerId?: string): Promise<Project[]> => {
   return result.rows;
 };
 
+export const findProjectsForUser = async (userId: string): Promise<Project[]> => {
+  const sql = `
+    SELECT p.id, p.name, p.description, pm.role, p.provider, p.repository, p.server_url,
+      p.monitoring_enabled, p.last_polled_at, p.last_poll_error, p.owner_id, p.created_at, p.updated_at
+    FROM projects p
+    JOIN project_members pm ON p.id = pm.project_id
+    WHERE pm.user_id = $1
+    ORDER BY p.created_at DESC;
+  `;
+  const result = await query<Project>(sql, [userId]);
+  return result.rows;
+};
+
 export const findProjectById = async (
   id: string,
   ownerId?: string
@@ -99,23 +113,43 @@ export const findProjectById = async (
 
 export const createProject = async (
   data: CreateProjectInput,
-  ownerId?: string | null
+  ownerId: string
 ): Promise<Project> => {
-  const sql = `
-    INSERT INTO projects (name, description, provider, repository, server_url, monitoring_enabled, owner_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING ${PROJECT_COLUMNS};
-  `;
-  const result = await query<Project>(sql, [
-    data.name.trim(),
-    data.description ? data.description.trim() : null,
-    data.provider?.trim() || 'github',
-    normalizeRepository(data.repository),
-    data.serverUrl ? data.serverUrl.trim() : null,
-    data.monitoringEnabled ?? false,
-    ownerId ?? null,
-  ]);
-  return result.rows[0];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const insertProjSql = `
+      INSERT INTO projects (name, description, provider, repository, server_url, monitoring_enabled, owner_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING ${PROJECT_COLUMNS};
+    `;
+    const projRes = await client.query<Project>(insertProjSql, [
+      data.name.trim(),
+      data.description ? data.description.trim() : null,
+      data.provider?.trim() || 'github',
+      normalizeRepository(data.repository),
+      data.serverUrl ? data.serverUrl.trim() : null,
+      data.monitoringEnabled ?? false,
+      ownerId,
+    ]);
+    const project = projRes.rows[0];
+
+    // Atomically create the OWNER membership record
+    const insertMemberSql = `
+      INSERT INTO project_members (project_id, user_id, role)
+      VALUES ($1, $2, 'OWNER');
+    `;
+    await client.query(insertMemberSql, [project.id, ownerId]);
+
+    await client.query('COMMIT');
+    return project;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 export const updateProject = async (
@@ -158,7 +192,6 @@ export const updateProject = async (
   }
 
   if (fields.length === 0) {
-    // If no fields to update, return the current project
     return findProjectById(id, ownerId);
   }
 

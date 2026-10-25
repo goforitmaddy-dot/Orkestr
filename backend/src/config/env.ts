@@ -12,6 +12,7 @@ const envPath = path.resolve(backendRoot, '.env');
 
 dotenv.config({ path: envPath });
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(process.cwd(), 'backend/.env') });
 
 export const config = {
   port: parseInt(process.env.PORT || '5001', 10),
@@ -26,14 +27,29 @@ export const config = {
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
   },
+  ai: {
+    geminiApiKey: process.env.GEMINI_API_KEY || '',
+  },
+  session: {
+    secret: process.env.SESSION_SECRET || 'orkestr-dev-session-secret-change-in-prod',
+  },
   github: {
     /** Personal Access Token or GitHub App installation token. */
     token: process.env.GITHUB_TOKEN || '',
     /** Shared secret configured on the GitHub webhook. Enables HMAC verification. */
-    webhookSecret: process.env.GITHUB_WEBHOOK_SECRET || '',
+    webhookSecret: (process.env.GITHUB_WEBHOOK_SECRET || '').trim().replace(/^["']|["']$/g, ''),
     apiBaseUrl: process.env.GITHUB_API_BASE_URL || 'https://api.github.com',
     /** Default owner/org used when a project only stores a repository name. */
     defaultOwner: process.env.GITHUB_OWNER || '',
+    // GitHub App OAuth identity linking
+    clientId: process.env.GITHUB_APP_CLIENT_ID || '',
+    clientSecret: process.env.GITHUB_APP_CLIENT_SECRET || '',
+    appId: process.env.GITHUB_APP_ID || '',
+    privateKey: process.env.GITHUB_APP_PRIVATE_KEY || '',
+    oauthCallbackUrl:
+      process.env.GITHUB_OAUTH_CALLBACK_URL ||
+      `http://localhost:${process.env.PORT || '5001'}/api/auth/github/callback`,
+    frontendUrl: process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'http://localhost:3000',
   },
   monitoring: {
     /** Master switch for the background CI poller. */
@@ -116,4 +132,3 @@ export const refreshGitHubCredentials = (): void => {
   const webhookSecret = readEnvValue('GITHUB_WEBHOOK_SECRET');
   if (webhookSecret !== null) config.github.webhookSecret = webhookSecret;
 };
-

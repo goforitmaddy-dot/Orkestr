@@ -5,13 +5,13 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Github, KeyRound, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { useAuth } from '@/components/auth/AuthProvider';
+import { useAuth } from '@/context/AuthContext';
 import { ApiError } from '@/lib/api';
 
 const LoginForm = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { signIn, signUp } = useAuth();
+  const { login, register } = useAuth();
 
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [name, setName] = useState('');
@@ -29,9 +29,9 @@ const LoginForm = () => {
 
     try {
       if (mode === 'signup') {
-        await signUp(name, email, password);
+        await register({ name, email, password });
       } else {
-        await signIn(email, password);
+        await login({ email, password });
       }
       router.replace(redirectTo);
       router.refresh();

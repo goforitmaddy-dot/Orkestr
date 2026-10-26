@@ -16,6 +16,7 @@ import {
   User,
   LogIn,
   UserPlus,
+  Radio,
 } from 'lucide-react';
 
 export const Header = () => {

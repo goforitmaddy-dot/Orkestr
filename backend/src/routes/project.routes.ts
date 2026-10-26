@@ -35,11 +35,11 @@ import {
   listServerErrorRecords,
   resolveServerErrorRecord,
 } from '../controllers/serverMonitoring.controller';
+import { requireAuth, optionalAuth } from '../middleware/auth';
 import {
-  requireAuth,
   requireProjectMember,
   requireProjectRole,
-} from '../middleware/auth';
+} from '../middleware/auth.middleware';
 
 const router = Router();
 
